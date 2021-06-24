@@ -6,10 +6,21 @@ contract BridgeCtxc {
     address private _operator;
     bool private _paused;
 
+    // fee
+    uint256 public feeDeposit;
+    uint256 public feeWithdraw;
+    uint256 public feebalance;
+    // the min value to deposit or withdraw
+    uint256 public minValue;
+
     constructor(address adminAddr, address operatorAddr) {
         _administrator = adminAddr;
         _operator = operatorAddr;
         _paused = false;
+        feeDeposit = 0;
+        feeWithdraw = 0;
+        feebalance = 0;
+        minValue = 0;
     }
 
     /**
@@ -73,8 +84,10 @@ contract BridgeCtxc {
      * @param amount    value of transference
      */
     function deposit(address to, uint256 amount) public payable whenNotPaused {
+        require(amount >= minValue, "deposit amount too smaller");
         require(msg.value == amount, "Invalid deposit amount");
-        emit Deposit(msg.sender, to, msg.value);
+        uint256 v = msg.value - feeDeposit;
+        emit Deposit(msg.sender, to, v);
     }
 
     // withdraw nativaToken(CTXC) according to the information from the other chain. Called by the relayers.
@@ -88,8 +101,9 @@ contract BridgeCtxc {
         whenNotPaused
     {
         require(address(this).balance >= amount, "not enough nativa token");
-        to.transfer(amount);
-        emit Withdraw(to, amount);
+        uint256 v = amount - feeWithdraw;
+        to.transfer(v);
+        emit Withdraw(to, v);
     }
 
     function pause() public onlyAdministrator whenNotPaused {
@@ -135,11 +149,32 @@ contract BridgeCtxc {
         emit OperatorChanged(oldOperator, _operator);
     }
 
+    function updateDepositFee(uint256 newFee) external onlyAdministrator whenPaused {
+        require(newFee >=0, "invalid fee");
+        feeDeposit = newFee;
+    }
+
+    function updateWithdrawFee(uint256 newFee) external onlyAdministrator whenPaused {
+        require(newFee >=0, "invalid fee");
+        feeWithdraw = newFee;
+    }
+    function updateMinValue(uint256 newValue) external onlyAdministrator {
+        require(newValue >=0, "invalid value");
+        minValue = newValue;
+    }
+
     function administrator() external view returns (address) {
         return _administrator;
     }
 
     function paused() external view returns (bool) {
         return _paused;
+    }
+
+    // get the fee to the fee address
+    function getFee(address payable feeAddr) external onlyAdministrator {
+        require(feebalance > 0, "no fee to withdraw");
+        feeAddr.transfer(feebalance);
+        feebalance = 0;
     }
 }

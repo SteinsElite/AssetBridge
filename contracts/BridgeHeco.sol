@@ -9,11 +9,14 @@ contract BridgeHeco {
     bool private _paused;
     BridgeToken private _htxc;
 
+    uint256 public minValue;
+
     constructor(address adminAddr, address operatorAddr) {
         _admin = adminAddr;
         _relayer = operatorAddr;
         _htxc = new BridgeToken("HTXC", "HTXC");
         _paused = false;
+        minValue = 0;
     }
 
     /**
@@ -46,6 +49,7 @@ contract BridgeHeco {
     event Unpasued(address account);
 
     function depositToken(address to, uint256 amount) public whenNotPaused {
+        require(amount >= minValue, "deposit token amount too smaller");
         require(
             _htxc.balanceOf(msg.sender) >= amount,
             "now enough token to deposit"
@@ -91,6 +95,11 @@ contract BridgeHeco {
             "new operator is the zero address"
         );
         _relayer = newOperatorAddr;
+    }
+
+    function updateMinValue(uint256 newValue) external onlyAdministrator {
+        require(newValue >=0, "invalid value");
+        minValue = newValue;
     }
 
     function administrator() external view returns (address) {
