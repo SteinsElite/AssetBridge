@@ -1,0 +1,26 @@
+{
+  "name": "bridge",
+  "version": "0.0.1",
+  "description": "A bridge exists as two contracts",
+  "main": "index.js",
+  "scripts": {
+    "user": "node scripts/user.js",
+    "operator": "node scripts/operator.js",
+    "deploylocal": "npx hardhat run scripts/deployCtxc.js & npx hardhat run scripts/deployHeco.js & wait ",
+    "deploytest": "npx hardhat --network kovan run scripts/deployCtxc.js & npx hardhat --network hecot run scripts/deployHeco.js & wait"
+  },
+  "keywords": [
+    "ctxc"
+  ],
+  "author": "Erij",
+  "license": "MIT",
+  "devDependencies": {
+    "@ethersproject/experimental": "^5.3.0",
+    "@nomiclabs/hardhat-ethers": "^2.0.2",
+    "@nomiclabs/hardhat-waffle": "^2.0.1",
+    "chai": "^4.3.4",
+    "ethereum-waffle": "^3.3.0",
+    "ethers": "^5.3.1",
+    "hardhat": "^2.3.3"
+  }
+}
