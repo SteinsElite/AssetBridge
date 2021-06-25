@@ -17,7 +17,7 @@ async function main() {
   let addr = await fsPromise.readFile("./addr.json");
   if (addr == "") {
     addr = {};
-  }else {
+  } else {
     addr = JSON.parse(addr);
   }
 
@@ -39,9 +39,7 @@ async function main() {
   await fsPromise.writeFile("./addr.json", data);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

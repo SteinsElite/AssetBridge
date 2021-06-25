@@ -18,10 +18,10 @@ async function main() {
   let addr = await fsPromise.readFile("./addr.json");
   if (addr == "") {
     addr = {};
-  }else {
+  } else {
     addr = JSON.parse(addr);
   }
-  
+
   let bridgeTokenAddr = await bridgeHeco.tokenAddress();
 
   let network = await deployer.provider.getNetwork();
@@ -32,7 +32,8 @@ async function main() {
     }
     addr.test.BridgeHeco = bridgeHeco.address;
     addr.test.BridgeToken = bridgeTokenAddr;
-  } else if (network.chainId == 31337) { // local vmjs
+  } else if (network.chainId == 31337) {
+    // local vmjs
     if (addr.local == undefined) {
       addr.local = {};
     }
@@ -43,9 +44,7 @@ async function main() {
   await fsPromise.writeFile("./addr.json", data);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

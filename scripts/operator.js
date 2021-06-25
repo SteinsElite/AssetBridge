@@ -5,14 +5,21 @@ const { NonceManager } = require("@ethersproject/experimental");
 const { tasks } = require("hardhat");
 const fsPromise = fs.promises;
 
+let kv_ctxc = {};
+let kv_heco = {};
+
 // there are 4 state of each task from for each bridge side, when state is in the finish state
 // we drop it
 // pending task is request that are get from the onchain event emitter
-let pendingTask = [];
+kv_ctxc.pendingTask = [];
+kv_heco.pendingTask = [];
 
-let readyTask = [];
+// sue for coucurrent sending transaction
+// kv_ctxc.readyTask = [];
+// kv_ctxc.readyTask = [];
 
-let processingTask = [];
+kv_ctxc.processingTask = [];
+kv_heco.processingTask = [];
 
 // some config params
 // local: run on ethereumjs vm
@@ -42,6 +49,7 @@ async function main() {
   const operatorPrv = config.operator;
   const ctxcUrl = config.ctxcUrl;
   const hecoUrl = config.hecoUrl;
+  const confirmations = config.confirmations;
 
   const providerCtxc = new ethers.getDefaultProvider(ctxcUrl);
   const providerHeco = new ethers.getDefaultProvider(hecoUrl);
@@ -54,25 +62,27 @@ async function main() {
   const bridgeToken = await getContractInstance("BridgeToken", signerHeco);
 
   console.log("wait for event in loop");
-
+  // listen to the ctxc network
   bridgeCtxc.on("Deposit", (from, to, amount, event) => {
     console.log("get the event from Ctxc deposit");
     console.log("from: ", from, "to: ", to, "with amount: ", amount);
     console.log("event: ", event);
-    pendingTask.push(event);
+    kv_ctxc.pendingTask.push(event);
   });
 
+  // listen to the heco network
   bridgeHeco.on("Deposit", (from, to, amount, event) => {
     console.log("get the event from Heco deposit");
     console.log("from: ", from, "to: ", to, "with amount: ", amount);
-    kv2.push(event);
+    console.log("event: ", event);
+    kv_heco.pendingTask.push(event);
   });
 
   setInterval(async () => {
-    if (processingTask.length == 0 && pendingTask.length != 0) {
-      console.log("deal with the event ...");
-      let task = pendingTask.shift();
-      processingTask.push(task);
+    if (kv_ctxc.processingTask.length == 0 && kv_ctxc.pendingTask.length != 0) {
+      console.log("... handle the task ...");
+      let task = kv_ctxc.pendingTask.shift();
+      kv_ctxc.processingTask.push(task);
       let to = task.args.to;
       let amount = task.args.amount;
       console.log("to ", to, "amount: ", amount);
@@ -82,11 +92,31 @@ async function main() {
       if (receipt.status == 0) {
         console.error("the transaction has been fail", receipt);
       } else {
-        processingTask.pop();
+        kv_ctxc.processingTask.pop();
       }
-      console.log("finish the task");
+      console.log("finish the deposit task: ");
     }
   }, 1500);
+
+  setInterval(async () => {
+    if (kv_heco.processingTask.length == 0 && kv_heco.pendingTask.length != 0) {
+      console.log("... handle the task ...");
+      let task = kv_heco.pendingTask.shift();
+      kv_heco.processingTask.push(task);
+      let to = task.args.to;
+      let amount = task.args.amount;
+      console.log("to ", to, "amount: ", amount);
+      let res = await bridgeHeco.withdrawToken(to, amount);
+      let receipt = await res.wait();
+      // if transaction is reverted, just write it into log for manual retry.
+      if (receipt.status == 0) {
+        console.error("the transaction has been fail", receipt);
+      } else {
+        kv_heco.processingTask.pop();
+      }
+      console.log("finish the withdraw task");
+    }
+  })
 }
 
 main().catch((error) => {
