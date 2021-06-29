@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
-contract BridgeCtxc {
+contract BridgeCtxc is Initializable {
     address private _administrator;
     address private _operator;
     bool private _paused;
@@ -12,8 +13,14 @@ contract BridgeCtxc {
     uint256 public feebalance;
     // the min value to deposit or withdraw
     uint256 public minValue;
+    // block number of another chain to transfer asset that previous cross-chain request 
+    // exsit is all finalization
+    uint256 public checkPoint;
 
-    constructor(address adminAddr, address operatorAddr) {
+    function initialize(address adminAddr, address operatorAddr)
+        public
+        initializer
+    {
         _administrator = adminAddr;
         _operator = operatorAddr;
         _paused = false;
@@ -21,6 +28,7 @@ contract BridgeCtxc {
         feeWithdraw = 0;
         feebalance = 0;
         minValue = 0;
+        checkPoint = block.number;
     }
 
     /**
@@ -74,7 +82,11 @@ contract BridgeCtxc {
     event Unpasued(address account);
 
     event Deposit(address indexed from, address to, uint256 amount);
-    event Withdraw(address indexed to, uint256 amount);
+    event Withdraw(
+        address indexed to,
+        bytes32 indexed taskHash,
+        uint256 amount
+    );
     event AdminChanged(address oldAddress, address newAddress);
     event OperatorChanged(address oldAddress, address newAddress);
 
@@ -95,15 +107,15 @@ contract BridgeCtxc {
      * @param to          bytes representation of destination address
      * @param amount      value of transference
      */
-    function withdraw(address payable to, uint256 amount)
-        public
-        onlyOperator
-        whenNotPaused
-    {
+    function withdraw(
+        address payable to,
+        uint256 amount,
+        bytes32 taskHash
+    ) public onlyOperator whenNotPaused {
         require(address(this).balance >= amount, "not enough nativa token");
         uint256 v = amount - feeWithdraw;
         to.transfer(v);
-        emit Withdraw(to, v);
+        emit Withdraw(to, taskHash, v);
     }
 
     function pause() public onlyAdministrator whenNotPaused {
@@ -149,17 +161,26 @@ contract BridgeCtxc {
         emit OperatorChanged(oldOperator, _operator);
     }
 
-    function updateDepositFee(uint256 newFee) external onlyAdministrator whenPaused {
-        require(newFee >=0, "invalid fee");
+    function updateDepositFee(uint256 newFee)
+        external
+        onlyAdministrator
+        whenPaused
+    {
+        require(newFee >= 0, "invalid fee");
         feeDeposit = newFee;
     }
 
-    function updateWithdrawFee(uint256 newFee) external onlyAdministrator whenPaused {
-        require(newFee >=0, "invalid fee");
+    function updateWithdrawFee(uint256 newFee)
+        external
+        onlyAdministrator
+        whenPaused
+    {
+        require(newFee >= 0, "invalid fee");
         feeWithdraw = newFee;
     }
+
     function updateMinValue(uint256 newValue) external onlyAdministrator {
-        require(newValue >=0, "invalid value");
+        require(newValue >= 0, "invalid value");
         minValue = newValue;
     }
 
@@ -172,7 +193,7 @@ contract BridgeCtxc {
     }
 
     // get the fee to the fee address
-    function getFee(address payable feeAddr) external onlyAdministrator {
+    function fetchFee(address payable feeAddr) external onlyAdministrator {
         require(feebalance > 0, "no fee to withdraw");
         feeAddr.transfer(feebalance);
         feebalance = 0;

@@ -7,10 +7,10 @@ async function main() {
   console.log("Deploying contracts with the account:", deployer.address);
 
   const BridgeHeco = await ethers.getContractFactory("BridgeHeco");
-  const bridgeHeco = await BridgeHeco.deploy(
+  const bridgeHeco = await upgrades.deployProxy(BridgeHeco, [
     deployer.address,
-    deployer.address
-  );
+    deployer.address,
+  ]);
   await bridgeHeco.deployed();
   console.log("Bridge Heco deployed to:", bridgeHeco.address);
 

@@ -1,22 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "./BridgeToken.sol";
 
 contract BridgeHeco {
     address private _admin;
-    address private _relayer;
+    address private _operator;
     bool private _paused;
-    BridgeToken private _htxc;
 
+    BridgeToken private _hCtxc;
     uint256 public minValue;
 
-    constructor(address adminAddr, address operatorAddr) {
+    uint256 public checkPoint; 
+
+
+    function initialize(address adminAddr, address operatorAddr) public {
         _admin = adminAddr;
-        _relayer = operatorAddr;
-        _htxc = new BridgeToken("HTXC", "HTXC");
+        _operator = operatorAddr;
+        _hCtxc = new BridgeToken("hCtxc", "hCtxc");
         _paused = false;
         minValue = 0;
+        checkPoint = block.number;
     }
 
     /**
@@ -28,7 +33,7 @@ contract BridgeHeco {
     }
 
     modifier onlyOperator() {
-        require(_relayer == msg.sender, "caller is not the operator");
+        require(_operator == msg.sender, "caller is not the operator");
         _;
     }
 
@@ -43,7 +48,7 @@ contract BridgeHeco {
     }
 
     event Deposit(address indexed from, address to, uint256 amount);
-    event Withdraw(address indexed to, uint256 amount);
+    event Withdraw(address indexed to, bytes32 indexed taskHash,uint256 amount);
     event ChangeAdmin(address oldAddress, address newAddress);
     event Paused(address account);
     event Unpasued(address account);
@@ -51,20 +56,20 @@ contract BridgeHeco {
     function depositToken(address to, uint256 amount) public whenNotPaused {
         require(amount >= minValue, "deposit token amount too smaller");
         require(
-            _htxc.balanceOf(msg.sender) >= amount,
+            _hCtxc.balanceOf(msg.sender) >= amount,
             "now enough token to deposit"
         );
-        _htxc.burn(msg.sender, amount);
+        _hCtxc.burn(msg.sender, amount);
         emit Deposit(msg.sender, to, amount);
     }
 
-    function withdrawToken(address to, uint256 amount)
+    function withdrawToken(address to, uint256 amount, bytes32 taskHash)
         external
         onlyOperator
         whenNotPaused
     {
-        _htxc.mint(to, amount);
-        emit Withdraw(to, amount);
+        _hCtxc.mint(to, amount);
+        emit Withdraw(to, taskHash, amount);
     }
 
     /**
@@ -94,7 +99,7 @@ contract BridgeHeco {
             newOperatorAddr != address(0),
             "new operator is the zero address"
         );
-        _relayer = newOperatorAddr;
+        _operator = newOperatorAddr;
     }
 
     function updateMinValue(uint256 newValue) external onlyAdministrator {
@@ -117,7 +122,7 @@ contract BridgeHeco {
     }
 
     function tokenAddress() external view returns (address) {
-        return address(_htxc);
+        return address(_hCtxc);
     }
 
     function paused() external view returns (bool) {

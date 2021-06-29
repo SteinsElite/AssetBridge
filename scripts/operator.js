@@ -63,10 +63,14 @@ async function main() {
 
   console.log("wait for event in loop");
   // listen to the ctxc network
-  bridgeCtxc.on("Deposit", (from, to, amount, event) => {
+  bridgeCtxc.on("Deposit", async (from, to, amount, event) => {
     console.log("get the event from Ctxc deposit");
     console.log("from: ", from, "to: ", to, "with amount: ", amount);
-    console.log("event: ", event);
+    // console.log("event: ", event);
+    // test
+    
+    console.log("index", event.transactionIndex);
+    console.log("the id is : ", kk);
     kv_ctxc.pendingTask.push(event);
   });
 
@@ -78,45 +82,48 @@ async function main() {
     kv_heco.pendingTask.push(event);
   });
 
-  setInterval(async () => {
-    if (kv_ctxc.processingTask.length == 0 && kv_ctxc.pendingTask.length != 0) {
-      console.log("... handle the task ...");
-      let task = kv_ctxc.pendingTask.shift();
-      kv_ctxc.processingTask.push(task);
-      let to = task.args.to;
-      let amount = task.args.amount;
-      console.log("to ", to, "amount: ", amount);
-      let res = await bridgeHeco.withdrawToken(to, amount);
-      let receipt = await res.wait();
-      // if transaction is reverted, just write it into log for manual retry.
-      if (receipt.status == 0) {
-        console.error("the transaction has been fail", receipt);
-      } else {
-        kv_ctxc.processingTask.pop();
-      }
-      console.log("finish the deposit task: ");
-    }
-  }, 1500);
+  // setInterval(async () => {
+  //   if (kv_ctxc.processingTask.length == 0 && kv_ctxc.pendingTask.length != 0) {
+  //     console.log("... handle the task ...");
+  //     let task = kv_ctxc.pendingTask.shift();
+  //     kv_ctxc.processingTask.push(task);
+  //     console.log("======= task is ============", task);
+  //     let to = task.args.to;
+  //     let amount = task.args.amount;
+  //     console.log("to ", to, "amount: ", amount);
+  //     let res = await bridgeHeco.withdrawToken(to, amount);
+  //     let receipt = await res.wait();
+  //     // if transaction is reverted, just write it into log for manual retry.
+  //     if (receipt.status == 0) {
+  //       // the transaction send will choke here, because the processingTask is always not null.
+  //       // we should figure out a method to deal with this condition
+  //       console.error("the transaction has been fail", receipt);
+  //     } else {
+  //       kv_ctxc.processingTask.pop();
+  //     }
+  //     console.log("finish the deposit task: ");
+  //   }
+  // }, 1500);
 
-  setInterval(async () => {
-    if (kv_heco.processingTask.length == 0 && kv_heco.pendingTask.length != 0) {
-      console.log("... handle the task ...");
-      let task = kv_heco.pendingTask.shift();
-      kv_heco.processingTask.push(task);
-      let to = task.args.to;
-      let amount = task.args.amount;
-      console.log("to ", to, "amount: ", amount);
-      let res = await bridgeHeco.withdrawToken(to, amount);
-      let receipt = await res.wait();
-      // if transaction is reverted, just write it into log for manual retry.
-      if (receipt.status == 0) {
-        console.error("the transaction has been fail", receipt);
-      } else {
-        kv_heco.processingTask.pop();
-      }
-      console.log("finish the withdraw task");
-    }
-  })
+  // setInterval(async () => {
+  //   if (kv_heco.processingTask.length == 0 && kv_heco.pendingTask.length != 0) {
+  //     console.log("... handle the task ...");
+  //     let task = kv_heco.pendingTask.shift();
+  //     kv_heco.processingTask.push(task);
+  //     let to = task.args.to;
+  //     let amount = task.args.amount;
+  //     console.log("to ", to, "amount: ", amount);
+  //     let res = await bridgeHeco.withdrawToken(to, amount);
+  //     let receipt = await res.wait();
+  //     // if transaction is reverted, just write it into log for manual retry.
+  //     if (receipt.status == 0) {
+  //       console.error("the transaction has been fail", receipt);
+  //     } else {
+  //       kv_heco.processingTask.pop();
+  //     }
+  //     console.log("finish the withdraw task");
+  //   }
+  // })
 }
 
 main().catch((error) => {

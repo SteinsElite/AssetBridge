@@ -1,3 +1,4 @@
+const { ethers, upgrades } = require("hardhat");
 const fs = require("fs");
 const fsPromise = fs.promises;
 
@@ -7,10 +8,10 @@ async function main() {
   console.log("Deploying contracts with the account:", deployer.address);
 
   const BridgeCtxc = await ethers.getContractFactory("BridgeCtxc");
-  const bridgeCtxc = await BridgeCtxc.deploy(
+  const bridgeCtxc = await upgrades.deployProxy(BridgeCtxc, [
     deployer.address,
-    deployer.address
-  );
+    deployer.address,
+  ]);
   await bridgeCtxc.deployed();
   console.log("Bridge Ctxc deployed to:", bridgeCtxc.address);
 

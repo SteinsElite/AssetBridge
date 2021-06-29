@@ -45,20 +45,21 @@ async function main() {
 
   const user = await signerCtxc.getAddress();
 
-  const epoch = 5;
+  const epoch = 50;
 
-  // // Ctxc ==> Heco
-  // for (let i = 0; i < epoch; i++) {
-  //   console.log("...  Ctxc ==> Heco  ...");
-  //   // get the response when send the transaction to the network but may not mined yet
-  //   let res = await bridgeCtxc.deposit(user, i, { value: i });
-  // }
-
-  // Heco ==> Ctxc
-  for (let j = 0; j < epoch; j++) {
-    console.log("...Heco ==> Ctxc ...");
-    let res = await bridgeHeco.depositToken(user, 1);
+  // Ctxc ==> Heco
+  for (let i = 0; i < epoch; i++) {
+    console.log("...  Ctxc ==> Heco  ...");
+    // get the response when send the transaction to the network but may not mined yet
+    let res = await bridgeCtxc.deposit(user, i, { value: i });
   }
+
+//   // Heco ==> Ctxc
+//   for (let j = 0; j < epoch; j++) {
+//     console.log("...Heco ==> Ctxc ...");
+//     let res = await bridgeHeco.depositToken(user, 1);
+//   }
+
 }
 
 main().catch((error) => {
