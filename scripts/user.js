@@ -45,7 +45,7 @@ async function main() {
 
   const user = await signerCtxc.getAddress();
 
-  const epoch = 50;
+  const epoch = 5;
 
   // Ctxc ==> Heco
   for (let i = 0; i < epoch; i++) {

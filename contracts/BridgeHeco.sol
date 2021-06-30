@@ -12,8 +12,7 @@ contract BridgeHeco {
     BridgeToken private _hCtxc;
     uint256 public minValue;
 
-    uint256 public checkPoint; 
-
+    uint256 public checkPoint;
 
     function initialize(address adminAddr, address operatorAddr) public {
         _admin = adminAddr;
@@ -47,8 +46,12 @@ contract BridgeHeco {
         _;
     }
 
-    event Deposit(address indexed from, address to, uint256 amount);
-    event Withdraw(address indexed to, bytes32 indexed taskHash,uint256 amount);
+    event DepositToken(address indexed from, address to, uint256 amount);
+    event WithdrawToken(
+        address indexed to,
+        bytes32 indexed taskHash,
+        uint256 amount
+    );
     event ChangeAdmin(address oldAddress, address newAddress);
     event Paused(address account);
     event Unpasued(address account);
@@ -60,16 +63,16 @@ contract BridgeHeco {
             "now enough token to deposit"
         );
         _hCtxc.burn(msg.sender, amount);
-        emit Deposit(msg.sender, to, amount);
+        emit DepositToken(msg.sender, to, amount);
     }
 
-    function withdrawToken(address to, uint256 amount, bytes32 taskHash)
-        external
-        onlyOperator
-        whenNotPaused
-    {
+    function withdrawToken(
+        address to,
+        uint256 amount,
+        bytes32 taskHash
+    ) external onlyOperator whenNotPaused {
         _hCtxc.mint(to, amount);
-        emit Withdraw(to, taskHash, amount);
+        emit WithdrawToken(to, taskHash, amount);
     }
 
     /**
@@ -103,7 +106,7 @@ contract BridgeHeco {
     }
 
     function updateMinValue(uint256 newValue) external onlyAdministrator {
-        require(newValue >=0, "invalid value");
+        require(newValue >= 0, "invalid value");
         minValue = newValue;
     }
 
@@ -127,5 +130,10 @@ contract BridgeHeco {
 
     function paused() external view returns (bool) {
         return _paused;
+    }
+
+    function updateCheckpoint(uint256 newCheckPoint) public onlyOperator {
+        require(newCheckPoint > checkPoint, "invalid checkpoint");
+        checkPoint = newCheckPoint;
     }
 }

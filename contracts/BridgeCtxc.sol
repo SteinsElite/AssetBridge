@@ -13,7 +13,7 @@ contract BridgeCtxc is Initializable {
     uint256 public feebalance;
     // the min value to deposit or withdraw
     uint256 public minValue;
-    // block number of another chain to transfer asset that previous cross-chain request 
+    // block number of another chain to transfer asset that previous cross-chain request
     // exsit is all finalization
     uint256 public checkPoint;
 
@@ -197,5 +197,10 @@ contract BridgeCtxc is Initializable {
         require(feebalance > 0, "no fee to withdraw");
         feeAddr.transfer(feebalance);
         feebalance = 0;
+    }
+
+    function updateCheckpoint(uint256 newCheckPoint) public onlyOperator {
+        require(newCheckPoint > checkPoint, "invalid checkpoint");
+        checkPoint = newCheckPoint;
     }
 }
