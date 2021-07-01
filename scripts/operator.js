@@ -2,242 +2,238 @@ const ethers = require("ethers");
 const fs = require("fs");
 const fsPromise = fs.promises;
 
-const threshold = 5;
-let finalizeBlkC;
-let finalizeBlkH;
+class OperatorState {
+  constructor(threshold) {
+    this.threshold = threshold;
 
-let finishTaskC = 0;
-let finishTaskH = 0;
+    this.finalizeBlkC = 0;
+    // the latest block number of the pending tasks
+    this.initBlkC = 0;
+    this.finishTaskC = 0;
+    this.pendingTasksC = [];
+    this.processingTasksC = [];
+    // indicate that we could process the task in the pending tasks
+    this.activateEntryC = false;
 
-let kv_ctxc = {};
-let kv_heco = {};
+    this.finalizeBlkH = 0;
+    // the latest block number of the pending tasks
+    this.initBlkH = 0;
+    this.finishTaskH = 0;
+    this.pendingTasksH = [];
+    this.processingTasksH = [];
+    // indicate that we could process the task in the pending tasks
+    this.activateEntryH = false;
+  }
 
-// there are 4 state of each task from for each bridge side, when state is in the finish state
-// we drop it
-// pending task is request that are get from the onchain event emitter
-kv_ctxc.pendingTask = [];
-kv_heco.pendingTask = [];
+  /**
+   * operation in (..., finalizeBlkC] is finalized, no need to check.
+   * operation in (finalizeBlk, currentBlk] is require to check for rebuilding the node state
+   * due to we have no idea which operation is finished(could be optimzie with redis as the cache).
+   * @param bridgeC: bridge contract instance on cortex
+   * @param bridgeH: bridge contract instance on heco
+   */
+  async restoreFromChain(bridgeC, bridgeH) {
+    console.log("Restore from blockchain data ...");
+    this.finalizeBlkC = (await bridgeC.checkPoint()).toNumber();
+    let fromBlkC = this.finalizeBlkC + 1;
 
-kv_ctxc.processingTask = [];
-kv_heco.processingTask = [];
+    this.initBlkC = await bridgeC.provider.getBlockNumber();
 
-kv_ctxc.finalizeTask = [];
-kv_heco.finalizeTask = [];
-
-// some config params
-// local: run on ethereumjs vm
-// test: run on test network(e.g. heco test network, kovan ..)
-const modes = ["local", "test", "main"];
-let mode = modes[0];
-
-async function getContractInstance(name, signer) {
-    let artifactPath =
-        "./artifacts/contracts/" + name + ".sol/" + name + ".json";
-    console.log("path for ", name, "is: ", artifactPath);
-    let addrPath = "./addr.json";
-
-    let data = await fsPromise.readFile(artifactPath);
-    data = JSON.parse(data);
-
-    let addr = await fsPromise.readFile(addrPath);
-    addr = JSON.parse(addr);
-    addr = addr[mode];
-    return new ethers.Contract(addr[name], data.abi, signer);
-}
-
-// restore operator Node state by the blockchain data
-// use when restart the operator due to some faults, before the
-// restore finish, we should pause the bridge.
-async function restoreFromChain(bridgeCtxc, bridgeHeco) {
-    // operation in (..., finalizeBlkC] is verified, no need to check.
-    // operation in (finalizeBlk, currentBlk] is require to process to restore the node state due to
-    // we have no idea which operation is finished(could be optimzie with redis as the cache).
-
-    finalizeBlkC = (await bridgeCtxc.checkPoint()).toNumber();
-    let fromBlkC = finalizeBlkC + 1;
-
-    let suspensiveTasksC = await bridgeCtxc.queryFilter(
-        "Deposit",
-        fromBlkC,
-        "latest"
-    );
+    let suspensiveTasksC = await bridgeC.queryFilter("Deposit", fromBlkC, this.initBlkC);
 
     // we should handle all the request tasks, once it has completed, we restore from chain successfully.
     suspensiveTasksC.forEach(async (task, index, arr) => {
-        let operationFilter = bridgeHeco.filters.WithdrawToken(
-            null,
-            task.transactionHash
-        );
-        let operation = await bridgeHeco.queryFilter(operationFilter);
+      let operationFilter = bridgeH.filters.WithdrawToken(null, task.transactionHash);
+      let operation = await bridgeH.queryFilter(operationFilter);
 
-        if (operation.length == 1) {
-            // if we found the operation in another chain,we have excute this operation,
-            // it should be delete from the suspensiveTask.
-            arr.splice(index, 1);
-        } else if (operation.length > 1) {
-            // if operation more than 1, it show that fault lead to excute the operation more than ocne.
-            console.error("the operation excuted more than once: ", task);
-            process.exit(2);
-        }
+      if (operation.length == 1) {
+        // if we found the operation in another chain,we have excute this operation,
+        // it should be delete from the suspensiveTask.
+        arr.splice(index, 1);
+      } else if (operation.length > 1) {
+        // if operation more than 1, it show that fault lead to excute the operation more than ocne.
+        console.error("the operation excuted more than once: ", task);
+        process.exit(2);
+      }
     });
     //now the task still in the suspensiveTasks is operation need to be excuted.
-    kv_ctxc.pendingTask = suspensiveTasksC;
+    this.pendingTasksC = suspensiveTasksC;
 
-    finalizeBlkH = (await bridgeHeco.checkPoint()).toNumber();
-    let fromBlkH = finalizeBlkH + 1;
+    this.finalizeBlkH = (await bridgeH.checkPoint()).toNumber();
+    let fromBlkH = this.finalizeBlkH + 1;
+    this.initBlkH = await bridgeH.provider.getBlockNumber();
 
-    let suspensiveTasksH = await bridgeHeco.queryFilter(
-        "DepositToken",
-        fromBlkH,
-        "latest"
+    let suspensiveTasksH = await bridgeH.queryFilter(
+      "DepositToken",
+      fromBlkH,
+      this.initBlkH
     );
-
     suspensiveTasksH.forEach(async (task, index, arr) => {
-        let operationFilter = bridgeCtxc.filters.Withdraw(
-            null,
-            task.transactionHash
-        );
-        let operation = await bridgeCtxc.queryFilter(operationFilter);
+      let operationFilter = bridgeC.filters.Withdraw(null, task.transactionHash);
+      let operation = await bridgeC.queryFilter(operationFilter);
 
-        if (operation.length == 1) {
-            arr.splice(index, 1);
-        } else if (operation.length > 1) {
-            console.error("the operation exuted more than once", task);
-            process.exit(2);
-        }
+      if (operation.length == 1) {
+        arr.splice(index, 1);
+      } else if (operation.length > 1) {
+        console.error("the operation exuted more than once", task);
+        process.exit(2);
+      }
     });
-    kv_heco.pendingTask = suspensiveTasksH;
-}
+    this.pendingTaskH = suspensiveTasksH;
 
-/**
- * update the checkpoint by send transaction to block chain:
- * when the number of finalize task more than the threshold
- */
-function shouldUpdateCheckpoint(finishTaskNum) {
-    if (finishTaskNum >= threshold) {
-        return true;
+    console.log(
+      "Restore finish:",
+      "pendingTaskC - ",
+      this.pendingTasksC.length,
+      "pendingTaskH - ",
+      this.pendingTasksH.length
+    );
+  }
+
+  async handleTaskC(bridgeC, bridgeH) {
+    // only when processing task is null(we can handle next task only after previous task is verified)
+    if (this.processingTasksC.length == 0 && this.pendingTasksC.length != 0) {
+      console.log("handle the task ...");
+      let task = this.pendingTasksC.shift();
+      this.processingTasksC.push(task);
+
+      let to = task.args.to;
+      let amount = task.args.amount;
+      // operator trigger withdraw on heco chain to hand out "h-token"
+      let rsp = await bridgeH.withdrawToken(to, amount, task.transactionHash);
+      try {
+        let receipt = await rsp.wait();
+        this.processingTasksC.pop();
+        this.finishTaskC += 1;
+      } catch (err) {
+        console.error("fail with: ", err);
+      }
+      if (task.blockNumber > this.finalizeBlkC) {
+        this.finalizeBlkC = task.blockNumber;
+      }
+      if (this.finishTaskC >= this.threshold) {
+        await this.updateCheckpoint(bridgeC, this.finalizeBlkC);
+        this.finishTaskC = 0;
+      }
+      console.log("finish the task",task.transactionHash);
     }
-    return false;
-}
+  }
 
-// when satisfy trigger condition, call this to update finalize block number.
-async function updateCheckpoint(contractInstance, finalizeBlk) {
+  async handleTaskH(bridgeC, bridgeH) {
+    if (this.processingTasksH.length == 0 && this.pendingTasksH.length != 0) {
+      console.log("handle the task ...");
+      let task = this.pendingTasksH.shift();
+      this.processingTasksH.push(task);
+      let to = task.args.to;
+      let amount = task.args.amount;
+
+      let rsp = await bridgeC.withdraw(to, amount, task.transactionHash);
+      try {
+        let receipt = await rsp.wait();
+        this.processingTasksH.pop();
+        this.finishTaskH += 1;
+      } catch (err) {
+        console.error("faile with : ", err);
+      }
+
+      if (task.blockNumber > this.finalizeBlkH) {
+        this.finalizeBlkH = task.blockNumber;
+      }
+      if (this.finishTaskH >= this.threshold) {
+        await this.updateCheckpoint(bridgeH, this.finalizeBlkH);
+        this.finishTaskH = 0;
+      }
+      console.log("finish the task");
+    }
+  }
+
+  // when satisfy trigger condition, call this to update finalize block number.
+  async updateCheckpoint(contractInstance, finalizeBlk) {
     // send transaction to nwtwork
     let res = await contractInstance.updateCheckpoint(finalizeBlk);
     // the transaction has been mined
     let receipt = await res.wait();
     console.log("finish update the checkpoint");
+  }
+}
+
+// some config params
+// local: run on ethereumjs vm
+// test: run on test network(e.g. heco test network, kovan ..)
+const modes = ["local", "test", "main"];
+let mode = modes[1];
+let interval = 1500;
+
+async function getContractInstance(name, signer) {
+  let artifactPath = "./artifacts/contracts/" + name + ".sol/" + name + ".json";
+  let addrPath = "./addr.json";
+
+  let data = await fsPromise.readFile(artifactPath);
+  data = JSON.parse(data);
+
+  let addr = await fsPromise.readFile(addrPath);
+  addr = JSON.parse(addr);
+  addr = addr[mode];
+  return new ethers.Contract(addr[name], data.abi, signer);
+}
+
+/**
+ * get the bridge instance of contract (with signer and provider)
+ *
+ */
+async function obtainBridge() {
+  let data = await fsPromise.readFile("./config.json");
+  data = JSON.parse(data);
+  let config = data[mode];
+
+  const operatorPrv = config.operator;
+  const ctxcUrl = config.ctxcUrl;
+  const hecoUrl = config.hecoUrl;
+  const confirmations = config.confirmations;
+
+  const providerCtxc = new ethers.getDefaultProvider(ctxcUrl);
+  const providerHeco = new ethers.getDefaultProvider(hecoUrl);
+
+  let signerCtxc = new ethers.Wallet(operatorPrv, providerCtxc);
+  let signerHeco = new ethers.Wallet(operatorPrv, providerHeco);
+
+  const bridgeCtxc = await getContractInstance("BridgeCtxc", signerCtxc);
+  const bridgeHeco = await getContractInstance("BridgeHeco", signerHeco);
+  const bridgeToken = await getContractInstance("BridgeToken", signerHeco);
+
+  return [bridgeCtxc, bridgeHeco, bridgeToken];
 }
 
 async function main() {
-    let data = await fsPromise.readFile("./config.json");
-    data = JSON.parse(data);
-    config = data[mode];
+  let [bridgeC, bridgeH, token] = await obtainBridge();
 
-    const operatorPrv = config.operator;
-    const ctxcUrl = config.ctxcUrl;
-    const hecoUrl = config.hecoUrl;
-    const confirmations = config.confirmations;
+  let operatorState = new OperatorState(5);
+  await operatorState.restoreFromChain(bridgeC, bridgeH);
 
-    const providerCtxc = new ethers.getDefaultProvider(ctxcUrl);
-    const providerHeco = new ethers.getDefaultProvider(hecoUrl);
+  console.log("... listen for new operation ...");
+  bridgeC.on("Deposit", (from, to, amount, event) => {
+    console.log("... Ctxc ==> Heco operation ...");
+    console.log("from: ", from, "to: ", to, "with amount: ", amount);
+    console.log("event block: ", event.blockNumber);
+    if (event.blockNumber > operatorState.initBlkC) {
+      operatorState.pendingTasksC.push(event);
+    }
+  });
+  bridgeH.on("DepositToken", (from, to, amount, event) => {
+    console.log("... Heco ==> Ctxc operation ...");
+    console.log("from: ", from, "to: ", to, "with amount: ", amount);
+    console.log("event block: ", event.blockNumber);
+    if (event.blockNumber > operatorState.initBlkH) {
+      operatorState.pendingTasksH.push(event);
+    }
+  });
 
-    let signerCtxc = new ethers.Wallet(operatorPrv, providerCtxc);
-    let signerHeco = new ethers.Wallet(operatorPrv, providerHeco);
-
-    const bridgeCtxc = await getContractInstance("BridgeCtxc", signerCtxc);
-    const bridgeHeco = await getContractInstance("BridgeHeco", signerHeco);
-    const bridgeToken = await getContractInstance("BridgeToken", signerHeco);
-
-    console.log("restore the state from blockchain log data");
-    await restoreFromChain(bridgeCtxc, bridgeHeco);
-
-    console.log("the pending task:", kv_ctxc.pendingTask);
-    console.log("-----------len ----------", kv_ctxc.pendingTask.length);
-
-    console.log("register listeners for events");
-
-    bridgeCtxc.on("Deposit", (from, to, amount, event) => {
-        console.log("get the event from Ctxc deposit");
-        console.log("from: ", from, "to: ", to, "with amount: ", amount);
-        kv_ctxc.pendingTask.push(event);
-    });
-
-    bridgeHeco.on("DepositToken", (from, to, amount, event) => {
-        console.log("get the event from Heco deposit");
-        console.log("from: ", from, "to: ", to, "with amount: ", amount);
-        kv_heco.pendingTask.push(event);
-    });
-
-    setInterval(async () => {
-        if (
-            kv_ctxc.processingTask.length == 0 &&
-            kv_ctxc.pendingTask.length != 0
-        ) {
-            console.log("... handle the task ...");
-            let task = kv_ctxc.pendingTask.shift();
-            kv_ctxc.processingTask.push(task);
-            console.log("======= task is ============", task);
-            let to = task.args.to;
-            let amount = task.args.amount;
-            console.log("to ", to, "amount: ", amount);
-            let res = await bridgeHeco.withdrawToken(
-                to,
-                amount,
-                task.transactionHash
-            );
-            let receipt = await res.wait();
-            // if transaction is reverted, just write it into log for manual retry.
-            if (receipt.status == 0) {
-                // the transaction send will choke here, because the processingTask is always not null.
-                // we should figure out a method to deal with this condition
-                console.error("the transaction has been fail", receipt);
-            } else {
-                kv_ctxc.processingTask.pop();
-                finishTaskC += 1;
-            }
-            if (task.blockNumber > finalizeBlkC) {
-                finalizeBlkC = task.blockNumber;
-            }
-            if (shouldUpdateCheckpoint(finishTaskC)) {
-                await updateCheckpoint(bridgeCtxc, finalizeBlkC);
-            }
-            console.log("finish the deposit task: ");
-        }
-    }, 1500);
-
-    setInterval(async () => {
-        if (
-            kv_heco.processingTask.length == 0 &&
-            kv_heco.pendingTask.length != 0
-        ) {
-            console.log("... handle the task ...");
-            let task = kv_heco.pendingTask.shift();
-            kv_heco.processingTask.push(task);
-            let to = task.args.to;
-            let amount = task.args.amount;
-            console.log("to ", to, "amount: ", amount);
-            let res = await bridgeHeco.withdrawToken(to, amount);
-            let receipt = await res.wait();
-            // if transaction is reverted, just write it into log for manual retry.
-            if (receipt.status == 0) {
-                console.error("the transaction has been fail", receipt);
-            } else {
-                kv_heco.processingTask.pop();
-                finishTaskH += 1;
-            }
-            if (task.blockNumber > finalizeBlkH) {
-                finalizeBlkH = task.blockNumber;
-            }
-            if (shouldUpdateCheckpoint(finishTaskH)) {
-                await updateCheckpoint(bridgeHeco, finalizeBlkH);
-            }
-            console.log("finish the withdraw task");
-        }
-    });
+  // handle the task
+  setInterval(() => operatorState.handleTaskC(bridgeC, bridgeH), interval);
+  setInterval(() => operatorState.handleTaskH(bridgeC, bridgeH), interval);
 }
 
 main().catch((error) => {
-    console.error(error);
-    process.exit(1);
+  console.error(error);
+  process.exit(1);
 });

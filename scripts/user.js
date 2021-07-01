@@ -6,7 +6,7 @@ const fsPromise = fs.promises;
 // local: run on ethereumjs vm
 // test: run on test network(e.g. heco test network, kovan ..)
 const modes = ["local", "test", "main"];
-let mode = modes[0];
+let mode = modes[1];
 
 // get contract instance to interact with by etherjs
 async function getContractInstance(name, signer) {
@@ -45,20 +45,20 @@ async function main() {
 
   const user = await signerCtxc.getAddress();
 
-  const epoch = 5;
+  const epoch = 2;
 
-  // Ctxc ==> Heco
-  for (let i = 0; i < epoch; i++) {
-    console.log("...  Ctxc ==> Heco  ...");
-    // get the response when send the transaction to the network but may not mined yet
-    let res = await bridgeCtxc.deposit(user, i, { value: i });
+  // // Ctxc ==> Heco
+  // for (let i = 0; i < epoch; i++) {
+  //   console.log("...  Ctxc ==> Heco  ...");
+  //   // get the response when send the transaction to the network but may not mined yet
+  //   let res = await bridgeCtxc.deposit(user, 1, { value: 1 });
+  // }
+
+  // Heco ==> Ctxc
+  for (let j = 0; j < epoch; j++) {
+    console.log("...Heco ==> Ctxc ...");
+    let res = await bridgeHeco.depositToken(user, 1);
   }
-
-//   // Heco ==> Ctxc
-//   for (let j = 0; j < epoch; j++) {
-//     console.log("...Heco ==> Ctxc ...");
-//     let res = await bridgeHeco.depositToken(user, 1);
-//   }
 
 }
 
