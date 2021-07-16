@@ -1,239 +1,371 @@
 const ethers = require("ethers");
 const fs = require("fs");
 const fsPromise = fs.promises;
+const obtainBridge = require("./bridgeInstance");
 
-class OperatorState {
-  constructor(threshold) {
-    this.threshold = threshold;
 
-    this.finalizeBlkC = 0;
-    // the latest block number of the pending tasks
-    this.initBlkC = 0;
-    this.finishTaskC = 0;
-    this.pendingTasksC = [];
-    this.processingTasksC = [];
-    // indicate that we could process the task in the pending tasks
-    this.activateEntryC = false;
 
-    this.finalizeBlkH = 0;
-    // the latest block number of the pending tasks
-    this.initBlkH = 0;
-    this.finishTaskH = 0;
-    this.pendingTasksH = [];
-    this.processingTasksH = [];
-    // indicate that we could process the task in the pending tasks
-    this.activateEntryH = false;
-  }
 
-  /**
-   * operation in (..., finalizeBlkC] is finalized, no need to check.
-   * operation in (finalizeBlk, currentBlk] is require to check for rebuilding the node state
-   * due to we have no idea which operation is finished(could be optimzie with redis as the cache).
-   * @param bridgeC: bridge contract instance on cortex
-   * @param bridgeH: bridge contract instance on heco
-   */
-  async restoreFromChain(bridgeC, bridgeH) {
-    console.log("Restore from blockchain data ...");
-    this.finalizeBlkC = (await bridgeC.checkPoint()).toNumber();
-    let fromBlkC = this.finalizeBlkC + 1;
+// we should make sure that tx before the 900 block should be processed success.
+const maxBlkIntervalC = 1000;
+const maxBlkIntervalH = 3000;
 
-    this.initBlkC = await bridgeC.provider.getBlockNumber();
+// the max number logs we could get from the blockchain node server
+const blkLogLimit = 90000;
 
-    let suspensiveTasksC = await bridgeC.queryFilter("Deposit", fromBlkC, this.initBlkC);
+const STATESTATUS = {
+    READY: 0, // ready for process new task
+    BUSY: 1, // this is exist enough task to be finished
+    IDLE: 2, // there is no task avaible
+};
 
-    // we should handle all the request tasks, once it has completed, we restore from chain successfully.
-    suspensiveTasksC.forEach(async (task, index, arr) => {
-      let operationFilter = bridgeH.filters.WithdrawToken(null, task.transactionHash);
-      let operation = await bridgeH.queryFilter(operationFilter);
-
-      if (operation.length == 1) {
-        // if we found the operation in another chain,we have excute this operation,
-        // it should be delete from the suspensiveTask.
-        arr.splice(index, 1);
-      } else if (operation.length > 1) {
-        // if operation more than 1, it show that fault lead to excute the operation more than ocne.
-        console.error("the operation excuted more than once: ", task);
-        process.exit(2);
-      }
-    });
-    //now the task still in the suspensiveTasks is operation need to be excuted.
-    this.pendingTasksC = suspensiveTasksC;
-
-    this.finalizeBlkH = (await bridgeH.checkPoint()).toNumber();
-    let fromBlkH = this.finalizeBlkH + 1;
-    this.initBlkH = await bridgeH.provider.getBlockNumber();
-
-    let suspensiveTasksH = await bridgeH.queryFilter(
-      "DepositToken",
-      fromBlkH,
-      this.initBlkH
-    );
-    suspensiveTasksH.forEach(async (task, index, arr) => {
-      let operationFilter = bridgeC.filters.Withdraw(null, task.transactionHash);
-      let operation = await bridgeC.queryFilter(operationFilter);
-
-      if (operation.length == 1) {
-        arr.splice(index, 1);
-      } else if (operation.length > 1) {
-        console.error("the operation exuted more than once", task);
-        process.exit(2);
-      }
-    });
-    this.pendingTaskH = suspensiveTasksH;
-
-    console.log(
-      "Restore finish:",
-      "pendingTaskC - ",
-      this.pendingTasksC.length,
-      "pendingTaskH - ",
-      this.pendingTasksH.length
-    );
-  }
-
-  async handleTaskC(bridgeC, bridgeH) {
-    // only when processing task is null(we can handle next task only after previous task is verified)
-    if (this.processingTasksC.length == 0 && this.pendingTasksC.length != 0) {
-      console.log("handle the task ...");
-      let task = this.pendingTasksC.shift();
-      this.processingTasksC.push(task);
-
-      let to = task.args.to;
-      let amount = task.args.amount;
-      // operator trigger withdraw on heco chain to hand out "h-token"
-      let rsp = await bridgeH.withdrawToken(to, amount, task.transactionHash);
-      try {
-        let receipt = await rsp.wait();
-        this.processingTasksC.pop();
-        this.finishTaskC += 1;
-      } catch (err) {
-        console.error("fail with: ", err);
-      }
-      if (task.blockNumber > this.finalizeBlkC) {
-        this.finalizeBlkC = task.blockNumber;
-      }
-      if (this.finishTaskC >= this.threshold) {
-        await this.updateCheckpoint(bridgeC, this.finalizeBlkC);
-        this.finishTaskC = 0;
-      }
-      console.log("finish the task",task.transactionHash);
-    }
-  }
-
-  async handleTaskH(bridgeC, bridgeH) {
-    if (this.processingTasksH.length == 0 && this.pendingTasksH.length != 0) {
-      console.log("handle the task ...");
-      let task = this.pendingTasksH.shift();
-      this.processingTasksH.push(task);
-      let to = task.args.to;
-      let amount = task.args.amount;
-
-      let rsp = await bridgeC.withdraw(to, amount, task.transactionHash);
-      try {
-        let receipt = await rsp.wait();
-        this.processingTasksH.pop();
-        this.finishTaskH += 1;
-      } catch (err) {
-        console.error("faile with : ", err);
-      }
-
-      if (task.blockNumber > this.finalizeBlkH) {
-        this.finalizeBlkH = task.blockNumber;
-      }
-      if (this.finishTaskH >= this.threshold) {
-        await this.updateCheckpoint(bridgeH, this.finalizeBlkH);
-        this.finishTaskH = 0;
-      }
-      console.log("finish the task");
-    }
-  }
-
-  // when satisfy trigger condition, call this to update finalize block number.
-  async updateCheckpoint(contractInstance, finalizeBlk) {
-    // send transaction to nwtwork
-    let res = await contractInstance.updateCheckpoint(finalizeBlk);
-    // the transaction has been mined
-    let receipt = await res.wait();
-    console.log("finish update the checkpoint");
-  }
-}
+// flag show that if the opeartor is update for maintain purpose to avoid maintain for twice
+let isMaintainC = false;
+let isMaintainH = false;
 
 // some config params
 // local: run on ethereumjs vm
 // test: run on test network(e.g. heco test network, kovan ..)
 const modes = ["local", "test", "main"];
-let mode = modes[1];
-let interval = 1500;
+let mode = modes[2];
+let interval = 3000;
 
-async function getContractInstance(name, signer) {
-  let artifactPath = "./artifacts/contracts/" + name + ".sol/" + name + ".json";
-  let addrPath = "./addr.json";
+// the state of the bridge of the cortex endpoint
+class OperatorStateC {
+    constructor(bridgeC, bridgeH) {
+        // init with the finalizeBlk, but will progressive increase when finish processing a block
+        this.finalizeBlkInx = 0;
+        // the block number of the operation which is in processing( there may be more than 1 operation in a block)
+        this.processingBlkInx = 0;
+        // the latest block when we restore the opeartor(should exclude from the follow-up monitor)
+        this.restoreToBlkInx = 0;
 
-  let data = await fsPromise.readFile(artifactPath);
-  data = JSON.parse(data);
+        // the tasks that wait for process on the target block chain
+        this.pendingTasks = [];
+        // the task that are processing, the length of it should be 1
+        this.processingTasks = [];
 
-  let addr = await fsPromise.readFile(addrPath);
-  addr = JSON.parse(addr);
-  addr = addr[mode];
-  return new ethers.Contract(addr[name], data.abi, signer);
+        // ====== the contract instance to interact with block chain(include provider&signer) ====
+        this.bridgeC = bridgeC;
+        this.bridgeH = bridgeH;
+    }
+
+    /**operation in (..., checkpoint] is finalized, no need to check.
+     * operation in (checkpoint, currentBlk] is require to check for rebuilding the node state
+     * due to we have no idea which operation is finished(could be optimzie with redis as the cache) .
+     */
+    async restoreFromChain() {
+        console.log("==============================================================");
+        console.log(">>> Restore the cortex operation state from blockchain data ...");
+        // init the 3 blk index as the same
+        this.finalizeBlkInx = (
+            await this.bridgeC.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        this.processingBlkInx = this.finalizeBlkInx;
+
+        let fromBlkInx = this.finalizeBlkInx + 1;
+        let toBlkInx = await this.bridgeC.provider.getBlockNumber();
+        this.restoreToBlkInx = toBlkInx;
+
+        let suspensiveTask = await this.bridgeC.queryFilter(
+            "Deposit",
+            fromBlkInx,
+            toBlkInx
+        );
+        console.log("*** number of suspensive task: ", suspensiveTask.length);
+        // we should handle all the request tasks, once it has completed, we restore from chain successfully.
+        let blkH = (await this.bridgeH.provider.getBlockNumber()) - blkLogLimit;
+        for (let i = suspensiveTask.length - 1; i >= 0; i--) {
+            let operationFilter = this.bridgeH.filters.WithdrawToken(
+                null,
+                suspensiveTask[i].transactionHash
+            );
+            //query the log in [latest - blkLogLimit, latest], we should not broke down more than the
+            let operation = await this.bridgeH.queryFilter(operationFilter, blkH);
+            if (operation.length == 1) {
+                suspensiveTask.splice(i, 1);
+            }
+        }
+        // now the task still in the suspensiveTasks is operation need to be excuted.
+        this.pendingTasks = suspensiveTask;
+        console.log(">>> Finish restore the state");
+        console.log(
+            "restore from blk: ",
+            fromBlkInx,
+            " to: ",
+            toBlkInx,
+            " with tasks: ",
+            this.pendingTasks.length
+        );
+    }
+
+    status() {
+        if (this.processingTasks.length > 0) {
+            return STATESTATUS.BUSY;
+        } else if (this.pendingTasks.length > 0) {
+            return STATESTATUS.READY;
+        }
+        return STATESTATUS.IDLE;
+    }
+
+    // sync the local state node from the onchain operation
+    async syncState() {
+        if (this.status() == STATESTATUS.READY) {
+            // the excuteOperation is atmoic for the status, only when finish all the excute,
+            // will change the STATUS READY to other.
+            await this.excuteOperation();
+        } else if (this.status() == STATESTATUS.IDLE && !isMaintainC) {
+            await this.updateCheckpointForMaintain();
+        }
+    }
+
+    async excuteOperation() {
+        // STATUS ==> BUSY
+        let task = this.pendingTasks.shift();
+        this.processingTasks.push(task);
+
+        let to = task.args.to;
+        let amount = task.args.amount;
+        console.log(
+            "excute the operation of the task Ctxc ==> Heco: ",
+            task.blockNumber,
+            "-",
+            task.transacationIndex
+        );
+
+        try {
+            // operator trigger withdraw on heco chain to hand out "h-token"
+            let rsp = await this.bridgeH.withdrawToken(to, amount, task.transactionHash);
+            await rsp.wait();
+            await this.updateCheckpointForOp();
+        } catch (err) {
+            console.error("fail with: ", err);
+        }
+        if (task.blockNumber > this.processingBlkInx) {
+            this.finalizeBlkInx = this.processingBlkInx;
+            this.processingBlkInx = task.blockNumber;
+        }
+        // STATUS escape from BUSY, to atmoic handle task
+        this.processingTasks.pop();
+    }
+
+    // trigger when finish excuting aan operation
+    // TODO(Erij): should simplify the logic of update the checkpoint.
+    async updateCheckpointForOp() {
+        let checkpoint = (
+            await this.bridgeC.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        if (this.finalizeBlkInx >= checkpoint + maxBlkIntervalC) {
+            let res = await this.bridgeC.updateCheckpoint(this.finalizeBlkInx);
+            await res.wait();
+            console.log("finish update the checkpoint due to the operation excution");
+        }
+    }
+
+    // only trigger when the operator is idle,due to we use our own node of heco.there is no need
+    async updateCheckpointForMaintain() {
+        isMaintainC = true;
+        let blkN = (await this.bridgeC.provider.getBlockNumber()) - 1;
+        let checkpoint = (
+            await this.bridgeC.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        if (blkN > checkpoint + maxBlkIntervalC) {
+            let res = await this.bridgeC.updateCheckpoint(blkN);
+            await res.wait();
+            console.log(
+                "finish update the checkpoint due to the maintain(too long not receive operation)"
+            );
+        }
+        isMaintainC = false;
+    }
 }
 
-/**
- * get the bridge instance of contract (with signer and provider)
- *
- */
-async function obtainBridge() {
-  let data = await fsPromise.readFile("./config.json");
-  data = JSON.parse(data);
-  let config = data[mode];
+// the state of the bridge of the Heco endpoint
+class OperatorStateH {
+    constructor(bridgeC, bridgeH) {
+        // init with the finalizeBlk, but will progressive increase when finish processing a block
+        this.finalizeBlkInx = 0;
+        // the block number of the operation which is in processing( there may be more than 1 operation in a block)
+        this.processingBlkInx = 0;
+        // the latest block when we restore the opeartor(should exclude from the follow-up monitor)
+        this.restoreToBlkInx = 0;
 
-  const operatorPrv = config.operator;
-  const ctxcUrl = config.ctxcUrl;
-  const hecoUrl = config.hecoUrl;
-  const confirmations = config.confirmations;
+        // the tasks that wait for process on the target block chain
+        this.pendingTasks = [];
+        // the task that are processing, the length of it should be 1
+        this.processingTasks = [];
 
-  const providerCtxc = new ethers.getDefaultProvider(ctxcUrl);
-  const providerHeco = new ethers.getDefaultProvider(hecoUrl);
+        // ====== the contract instance to interact with block chain(include provider&signer) ====
+        this.bridgeC = bridgeC;
+        this.bridgeH = bridgeH;
+    }
 
-  let signerCtxc = new ethers.Wallet(operatorPrv, providerCtxc);
-  let signerHeco = new ethers.Wallet(operatorPrv, providerHeco);
+    /**operation in (..., checkpoint] is finalized, no need to check.
+     * operation in (checkpoint, currentBlk] is require to check for rebuilding the node state
+     * due to we have no idea which operation is finished(could be optimzie with redis as the cache) .
+     */
+    async restoreFromChain() {
+        console.log("==============================================================");
+        console.log(">>> Restore the heco operation state from blockchain data ...");
+        // init the 3 blk index as the same
+        this.finalizeBlkInx = (
+            await this.bridgeH.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        this.processingBlkInx = this.finalizeBlkInx;
 
-  const bridgeCtxc = await getContractInstance("BridgeCtxc", signerCtxc);
-  const bridgeHeco = await getContractInstance("BridgeHeco", signerHeco);
-  const bridgeToken = await getContractInstance("BridgeToken", signerHeco);
+        let fromBlkInx = this.finalizeBlkInx + 1;
+        let toBlkInx = await this.bridgeH.provider.getBlockNumber();
+        this.restoreToBlkInx = toBlkInx;
 
-  return [bridgeCtxc, bridgeHeco, bridgeToken];
+        let suspensiveTask = await this.bridgeH.queryFilter(
+            "DepositToken",
+            fromBlkInx,
+            toBlkInx
+        );
+        console.log("*** number of suspensive task: ", suspensiveTask.length);
+        // we should handle all the request tasks, once it has completed, we restore from chain successfully.
+        let blkC = (await this.bridgeC.provider.getBlockNumber()) - blkLogLimit;
+        for (let i = suspensiveTask.length - 1; i >= 0; i--) {
+            let operationFilter = this.bridgeC.filters.Withdraw(
+                null,
+                suspensiveTask[i].transactionHash
+            );
+            //query the log in [latest - blkLogLimit, latest], we should not broke down more than the
+            let operation = await this.bridgeC.queryFilter(operationFilter, blkC);
+            if (operation.length == 1) {
+                suspensiveTask.splice(i, 1);
+            }
+        }
+        // now the task still in the suspensiveTasks is operation need to be excuted.
+        this.pendingTasks = suspensiveTask;
+        console.log(">>> Finish restore the state ");
+        console.log(
+            "restore from blk: ",
+            fromBlkInx,
+            " to: ",
+            toBlkInx,
+            "with tasks: ",
+            this.pendingTasks.length
+        );
+    }
+
+    status() {
+        if (this.processingTasks.length > 0) {
+            return STATESTATUS.BUSY;
+        } else if (this.pendingTasks.length > 0) {
+            return STATESTATUS.READY;
+        }
+        return STATESTATUS.IDLE;
+    }
+
+    // sync the local state node from the onchain operation
+    async syncState() {
+        if (this.status() == STATESTATUS.READY) {
+            // the excuteOperation is atmoic for the status, only when finish all the excute,
+            // will change the STATUS READY to other.
+            await this.excuteOperation();
+        } else if (this.status() == STATESTATUS.IDLE && !isMaintainH) {
+            await this.updateCheckpointForMaintain();
+        }
+    }
+
+    /**
+     * @param task: task  to be processed, one task represent one operation
+     */
+    async excuteOperation() {
+        // STATUS ==> BUSY
+        let task = this.pendingTasks.shift();
+        this.processingTasks.push(task);
+
+        let to = task.args.to;
+        let amount = task.args.amount;
+        console.log(
+            "excute the operation of the task Heco ==> Ctxc: ",
+            task.blockNumber,
+            "-",
+            task.transacationIndex
+        );
+
+        try {
+            // operator trigger withdraw on heco chain to hand out "h-token"
+            let rsp = await this.bridgeC.withdraw(to, amount, task.transactionHash);
+            await rsp.wait();
+            await this.updateCheckpointForOp();
+        } catch (err) {
+            console.error("fail with: ", err);
+        }
+        if (task.blockNumber > this.processingBlkInx) {
+            this.finalizeBlkInx = this.processingBlkInx;
+            this.processingBlkInx = task.blockNumber;
+        }
+        // STATUS escape from BUSY, to atmoic handle task
+        this.processingTasks.pop();
+    }
+
+    // trigger when finish excuting aan operation
+    // TODO(Erij): should simplify the logic of update the checkpoint.
+    async updateCheckpointForOp() {
+        let checkpoint = (
+            await this.bridgeH.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        if (this.finalizeBlkInx >= checkpoint + maxBlkIntervalH) {
+            let res = await this.bridgeH.updateCheckpoint(this.finalizeBlkInx);
+            await res.wait();
+            console.log("finish update the checkpoint due to the operation excution");
+        }
+    }
+
+    // only trigger when the operator is idle,due to we use our own node of heco.there is no need
+    async updateCheckpointForMaintain() {
+        isMaintainH = true;
+        let blkN = (await this.bridgeH.provider.getBlockNumber()) - 1;
+        let checkpoint = (
+            await this.bridgeH.checkPoint({ gasLimit: 1000000 })
+        ).toNumber();
+        if (blkN > checkpoint + maxBlkIntervalH) {
+            let res = await this.bridgeH.updateCheckpoint(blkN);
+            await res.wait();
+            console.log(
+                "finish update the checkpoint due to the maintain(too long not receive operation)"
+            );
+        }
+        isMaintainH = false;
+    }
 }
 
 async function main() {
-  let [bridgeC, bridgeH, token] = await obtainBridge();
+    let [bridgeC, bridgeH, token] = await obtainBridge(mode);
 
-  let operatorState = new OperatorState(5);
-  await operatorState.restoreFromChain(bridgeC, bridgeH);
+    let operatorStateC = new OperatorStateC(bridgeC, bridgeH);
+    let operatorStateH = new OperatorStateH(bridgeC, bridgeH);
+    await operatorStateC.restoreFromChain();
+    await operatorStateH.restoreFromChain();
 
-  console.log("... listen for new operation ...");
-  bridgeC.on("Deposit", (from, to, amount, event) => {
-    console.log("... Ctxc ==> Heco operation ...");
-    console.log("from: ", from, "to: ", to, "with amount: ", amount);
-    console.log("event block: ", event.blockNumber);
-    if (event.blockNumber > operatorState.initBlkC) {
-      operatorState.pendingTasksC.push(event);
-    }
-  });
-  bridgeH.on("DepositToken", (from, to, amount, event) => {
-    console.log("... Heco ==> Ctxc operation ...");
-    console.log("from: ", from, "to: ", to, "with amount: ", amount);
-    console.log("event block: ", event.blockNumber);
-    if (event.blockNumber > operatorState.initBlkH) {
-      operatorState.pendingTasksH.push(event);
-    }
-  });
+    console.log(">>> listen for new operation ...");
+    bridgeC.on("Deposit", (from, to, amount, event) => {
+        console.log("--- Ctxc ==> Heco operation ...");
+        console.log("from: ", from, "to: ", to, "with amount: ", amount);
+        // not include the block for twice
+        if (event.blockNumber > operatorStateC.restoreToBlkInx) {
+            operatorStateC.pendingTasks.push(event);
+        }
+    });
 
-  // handle the task
-  setInterval(() => operatorState.handleTaskC(bridgeC, bridgeH), interval);
-  setInterval(() => operatorState.handleTaskH(bridgeC, bridgeH), interval);
+    bridgeH.on("DepositToken", (from, to, amount, event) => {
+        console.log("--- Heco ==> Ctxc operation ...");
+        console.log("from: ", from, "to: ", to, "with amount: ", amount);
+        console.log("event block: ", event.blockNumber);
+        if (event.blockNumber > operatorStateH.restoreToBlkInx) {
+            operatorStateH.pendingTasks.push(event);
+        }
+    });
+
+    // handle the task
+    // setInterval(() => operatorStateC.syncState(), interval);
+    // setInterval(() => operatorStateH.syncState(), interval);
 }
 
 main().catch((error) => {
-  console.error(error);
-  process.exit(1);
+    console.error(error);
+    process.exit(1);
 });
