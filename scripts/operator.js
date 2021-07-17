@@ -2,9 +2,7 @@ const ethers = require("ethers");
 const fs = require("fs");
 const fsPromise = fs.promises;
 const obtainBridge = require("./bridgeInstance");
-
-
-
+const { loggerC, loggerH } = require("./logger");
 
 // we should make sure that tx before the 900 block should be processed success.
 const maxBlkIntervalC = 1000;
@@ -55,8 +53,7 @@ class OperatorStateC {
      * due to we have no idea which operation is finished(could be optimzie with redis as the cache) .
      */
     async restoreFromChain() {
-        console.log("==============================================================");
-        console.log(">>> Restore the cortex operation state from blockchain data ...");
+        loggerH.log("info", "restore state from cortex log data");
         // init the 3 blk index as the same
         this.finalizeBlkInx = (
             await this.bridgeC.checkPoint({ gasLimit: 1000000 })
@@ -72,7 +69,7 @@ class OperatorStateC {
             fromBlkInx,
             toBlkInx
         );
-        console.log("*** number of suspensive task: ", suspensiveTask.length);
+        loggerC.log("info", `number of suspensive task: ${suspensiveTask.length}`);
         // we should handle all the request tasks, once it has completed, we restore from chain successfully.
         let blkH = (await this.bridgeH.provider.getBlockNumber()) - blkLogLimit;
         for (let i = suspensiveTask.length - 1; i >= 0; i--) {
@@ -88,14 +85,9 @@ class OperatorStateC {
         }
         // now the task still in the suspensiveTasks is operation need to be excuted.
         this.pendingTasks = suspensiveTask;
-        console.log(">>> Finish restore the state");
-        console.log(
-            "restore from blk: ",
-            fromBlkInx,
-            " to: ",
-            toBlkInx,
-            " with tasks: ",
-            this.pendingTasks.length
+        loggerC.log(
+            "info",
+            `finish restore from blk ${fromBlkInx} to ${toBlkInx} with ${this.pendingTasks.length} pending task`
         );
     }
 
@@ -126,11 +118,9 @@ class OperatorStateC {
 
         let to = task.args.to;
         let amount = task.args.amount;
-        console.log(
-            "excute the operation of the task Ctxc ==> Heco: ",
-            task.blockNumber,
-            "-",
-            task.transacationIndex
+        loggerC.log(
+            "info",
+            `excute the operation: [to ${to} amount ${amount}] of id ${task.blockNumber}-${task.transacationIndex}`
         );
 
         try {
@@ -139,7 +129,7 @@ class OperatorStateC {
             await rsp.wait();
             await this.updateCheckpointForOp();
         } catch (err) {
-            console.error("fail with: ", err);
+            loggerC.log("error", `fail to excute the operation with ${err}`);
         }
         if (task.blockNumber > this.processingBlkInx) {
             this.finalizeBlkInx = this.processingBlkInx;
@@ -158,7 +148,7 @@ class OperatorStateC {
         if (this.finalizeBlkInx >= checkpoint + maxBlkIntervalC) {
             let res = await this.bridgeC.updateCheckpoint(this.finalizeBlkInx);
             await res.wait();
-            console.log("finish update the checkpoint due to the operation excution");
+            loggerC.log("info", "update the checkpoint after the operation excution");
         }
     }
 
@@ -172,8 +162,9 @@ class OperatorStateC {
         if (blkN > checkpoint + maxBlkIntervalC) {
             let res = await this.bridgeC.updateCheckpoint(blkN);
             await res.wait();
-            console.log(
-                "finish update the checkpoint due to the maintain(too long not receive operation)"
+            loggerC.log(
+                "info",
+                "update checkpoint for maintain（too loog without a transaction)"
             );
         }
         isMaintainC = false;
@@ -205,8 +196,7 @@ class OperatorStateH {
      * due to we have no idea which operation is finished(could be optimzie with redis as the cache) .
      */
     async restoreFromChain() {
-        console.log("==============================================================");
-        console.log(">>> Restore the heco operation state from blockchain data ...");
+        loggerH.log("info", "restore state from heco log data");
         // init the 3 blk index as the same
         this.finalizeBlkInx = (
             await this.bridgeH.checkPoint({ gasLimit: 1000000 })
@@ -222,7 +212,7 @@ class OperatorStateH {
             fromBlkInx,
             toBlkInx
         );
-        console.log("*** number of suspensive task: ", suspensiveTask.length);
+        loggerH.log("info", `number of suspensive task: ${suspensiveTask.length}`);
         // we should handle all the request tasks, once it has completed, we restore from chain successfully.
         let blkC = (await this.bridgeC.provider.getBlockNumber()) - blkLogLimit;
         for (let i = suspensiveTask.length - 1; i >= 0; i--) {
@@ -238,14 +228,9 @@ class OperatorStateH {
         }
         // now the task still in the suspensiveTasks is operation need to be excuted.
         this.pendingTasks = suspensiveTask;
-        console.log(">>> Finish restore the state ");
-        console.log(
-            "restore from blk: ",
-            fromBlkInx,
-            " to: ",
-            toBlkInx,
-            "with tasks: ",
-            this.pendingTasks.length
+        loggerH.log(
+            "info",
+            `finish restore from blk ${fromBlkInx} to ${toBlkInx} with ${this.pendingTasks.length} pending task`
         );
     }
 
@@ -279,11 +264,10 @@ class OperatorStateH {
 
         let to = task.args.to;
         let amount = task.args.amount;
-        console.log(
-            "excute the operation of the task Heco ==> Ctxc: ",
-            task.blockNumber,
-            "-",
-            task.transacationIndex
+
+        loggerH.log(
+            "info",
+            `excute the operation: [to ${to} amount ${amount}] of id ${task.blockNumber}-${task.transacationIndex}`
         );
 
         try {
@@ -292,7 +276,7 @@ class OperatorStateH {
             await rsp.wait();
             await this.updateCheckpointForOp();
         } catch (err) {
-            console.error("fail with: ", err);
+            loggerH.log("error", `fail with: ${err}`);
         }
         if (task.blockNumber > this.processingBlkInx) {
             this.finalizeBlkInx = this.processingBlkInx;
@@ -311,7 +295,7 @@ class OperatorStateH {
         if (this.finalizeBlkInx >= checkpoint + maxBlkIntervalH) {
             let res = await this.bridgeH.updateCheckpoint(this.finalizeBlkInx);
             await res.wait();
-            console.log("finish update the checkpoint due to the operation excution");
+            loggerH.log("info", "update the checkpoint after operation excution");
         }
     }
 
@@ -325,8 +309,9 @@ class OperatorStateH {
         if (blkN > checkpoint + maxBlkIntervalH) {
             let res = await this.bridgeH.updateCheckpoint(blkN);
             await res.wait();
-            console.log(
-                "finish update the checkpoint due to the maintain(too long not receive operation)"
+            loggerH.log(
+                "info",
+                "update checkpoint for maintain（too loog without a transaction"
             );
         }
         isMaintainH = false;
